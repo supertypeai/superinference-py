@@ -1,0 +1,27 @@
+Metadata-Version: 2.1
+Name: superinference
+Version: 1.0.2
+Summary: Superinference is a library that infers analysis-ready attributes from a person''s social media username or unique identifier and returns them as JSON objects.
+Author: Timotius Marselo
+Author-email: timotiusmarselo@gmail.com
+Description-Content-Type: text/markdown
+License-File: license.txt
+
+Superinference is a library that infers analysis-ready attributes from a person's social media username or unique identifier and returns them as JSON objects.
+
+It supports both token-based (OAuth) authorization for authenticated requests and unauthenticated requests for public data. It currently supports the following social media channels:
+* GitHub
+* Dev.to
+
+It is currently actively being developed so more supported social media channels will be added in the future.
+
+You might use superinference to generate profile pages of your app users, or to enrich your user data with additional information by inferring them from their social media accounts. You might also use it to accelerate your account creation process by directly inferring attributes such as their email address, name, and profile picture.
+MIT License
+
+Copyright 2023 Supertype
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

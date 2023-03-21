@@ -1,0 +1,12 @@
+LICENSE.txt
+README.md
+license.txt
+pyproject.toml
+setup.cfg
+src/superinference/__init__.py
+src/superinference/devto.py
+src/superinference/github.py
+src/superinference.egg-info/PKG-INFO
+src/superinference.egg-info/SOURCES.txt
+src/superinference.egg-info/dependency_links.txt
+src/superinference.egg-info/top_level.txt
