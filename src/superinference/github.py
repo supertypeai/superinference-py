@@ -422,15 +422,12 @@ class GithubProfile:
             }
     
     def perform_inference(self, top_repo_n=3, top_language_n=3, include_private=False):
-        """Perform inference on the user's Github profile. This will return a dictionary that includes data and statistics regarding their profile, repository, skill, activity, and contribution.
+        """Perform inference on the user's Github profile. This will print out a dictionary that includes data and statistics regarding their profile, repository, skill, activity, and contribution. The dictionary will also be stored in the inference attribute.
 
         Args:
             top_repo_n (int, optional): Number of top repositories to be included in the inference. Defaults to 3.
             top_language_n (int, optional): Number of top languages to be included in the inference. Defaults to 3.
             include_private (bool, optional): Whether to include private repositories in the inference. Defaults to False.
-            
-        Returns:
-            dict: Inferred data regarding the user's Github profile, repository, skill, activity, and contribution.
         """
         profile = self._profile_inference()
         repository = self._repository_inference(top_repo_n=top_repo_n, include_private=include_private)
