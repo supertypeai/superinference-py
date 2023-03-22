@@ -200,6 +200,7 @@ class GithubProfile:
         Returns:
             dict: Github contribution data and statistics
         """
+        repo_url = f"{self._api_url}/users/{self.username}/repos?sort=updated&direction=desc&per_page=100"
         if include_private:
             self._username_token_check()
             issue_url = f"{self._api_url}/search/issues?q=type:issue author:{self.username}&sort=author-date&order=desc&per_page=100"
@@ -207,10 +208,12 @@ class GithubProfile:
         else:
             issue_url = f"{self._api_url}/search/issues?q=type:issue author:{self.username} is:public&sort=author-date&order=desc&per_page=100"
             pr_url = f"{self._api_url}/search/issues?q=type:pr author:{self.username} is:public&sort=author-date&order=desc&per_page=100"
-            
+        
         issue_data, issue_message = self._multipage_request(issue_url, "issues", "items")
         pr_data, pr_message = self._multipage_request(pr_url, "PRs", "items")
-        issues, prs = [], []
+        repo_data, ingoing_contribution_message = self._multipage_request(repo_url, "repositories")
+
+        issues, prs, ingoing_contributions =  [], [], {}
 
         for i in issue_data:
             if i['author_association'] != 'OWNER':
@@ -238,7 +241,16 @@ class GithubProfile:
                     'repo_name': split_url[4],
                     'repo_url': f'https://github.com/{split_url[3]}/{split_url[4]}'
                 })
+        
+        for r in repo_data:
+            if not r['fork']:
+                repo_contributor, ingoing_contribution_message = self._multipage_request(r['contributors_url'], "contribution")
                 
+                for contribution in repo_contributor:
+                    contributor = contribution['login']
+                    if contributor != self.username:
+                        ingoing_contributions[contributor]= ingoing_contributions.get(contributor, 0) + contribution['contributions']
+
         merged_pr_count = len([p for p in prs if p['merged_at']])
 
         contribution_count = {}
@@ -247,19 +259,22 @@ class GithubProfile:
             contribution_count[repo_owner] = contribution_count.get(repo_owner, 0) + 1
 
         contribution_count = dict(sorted(contribution_count.items(), key=lambda x: x[1], reverse=True))
+        ingoing_contributions = dict(sorted(ingoing_contributions.items(), key = lambda item: item[1], reverse = True))
         
         contribution = {
                         'issue_count': len(issues),
                         'total_pr_count': len(prs),
                         'merged_pr_count': merged_pr_count,
-                        'contribution_count_per_repo_owner': contribution_count,
+                        'user_contribution_to_other_repo': contribution_count,
+                        'other_contribution_to_user_repo' : ingoing_contributions,
                         'created_issue': issues,
                         'created_pr': prs,
                         'issue_api_message': issue_message,
-                        'pr_api_message': pr_message
+                        'pr_api_message': pr_message,
+                        'contribution_api_message': ingoing_contribution_message
                         }
 
-        return {'contribution': contribution, 'issue_api_message': issue_message, 'pr_api_message': pr_message}
+        return {'contribution': contribution, 'issue_api_message': issue_message, 'pr_api_message': pr_message, 'contribution_api_message' : ingoing_contribution_message}
     
     def _activity_inference(self, original_repos, top_repo_n=3, include_private=False):
         """Infer data regarding the user's Github activity (commits)
