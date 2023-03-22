@@ -2,6 +2,10 @@ import requests
 import re
 from datetime import datetime
 from base64 import b64decode
+from rich.console import Console
+from rich.theme import Theme
+
+console = Console(theme=Theme({"repr.str":"#54A24B", "repr.number": "#FF7F0E", "repr.none":"#808080"}))
 
 class GithubProfile:
     def __init__(self, username, access_token=None):
@@ -13,6 +17,7 @@ class GithubProfile:
         """
         self.username = username
         self.access_token = access_token
+        self.inference = None
         self._api_url = "https://api.github.com"
 
     def _request(self, url, error_handling=True):
@@ -433,10 +438,12 @@ class GithubProfile:
         activity = self._activity_inference(original_repos=repository['original_repos'], top_repo_n=top_repo_n, include_private=include_private)
         contribution = self._contribution_inference(include_private=include_private)
         
-        return {
+        self.inference = {
             "profile": profile,
             "skill": skill,
             "stats": repository["stats"],
             "activity": activity,
             "contribution": contribution
         }
+        
+        console.print(self.inference)
