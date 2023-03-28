@@ -1,6 +1,6 @@
 import requests
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from base64 import b64decode
 from rich.console import Console
 from rich.theme import Theme
@@ -63,7 +63,7 @@ class GithubProfile:
             headers (dict): Response headers from the Github API
 
         Returns:
-            str: Next link
+            str: Next link to be requested
         """
         if "Link" in headers:
             links = headers["Link"]
@@ -75,19 +75,23 @@ class GithubProfile:
         else:
             return None
     
-    def _multipage_request(self, url, item_name="items", json_key=None):
+    def _multipage_request(self, url, json_key=None):
         """Makes a request to the Github API and handles pagination
 
         Args:
             url (str): URL to be requested
-            item_name (str, optional): Name of the items requested, will be used in the message. Defaults to "items".
             json_key (str, optional): Key of the items in the JSON response. Defaults to None.
 
         Returns:
-            list: List of items
+            item_list (list): List of combined items from all pages
+            incomplete_results (bool): Whether the results are incomplete or not (due to hitting rate limits)
+            total_count (int): The total count of items for search queries. Only returned for search endpoints.
+        
         """
+        incomplete_results = False
         item_list = []
-        message = None
+        is_search = "/search/" in url
+        
         while url:
             response = self._request(url)
             if json_key:
@@ -97,9 +101,13 @@ class GithubProfile:
             url = self._parse_next_link(response.headers)
             remaining_rate = int(response.headers["X-Ratelimit-Remaining"])
             if url and remaining_rate == 0:
-                message = f"Hey there! Looks like the inference above is from the latest {len(item_list)} {item_name} since you've reached the API rate limit 😉."
+                incomplete_results = True
                 url = None
-        return item_list, message
+        if is_search:
+            total_count = response.json()["total_count"]
+            return item_list, incomplete_results, total_count
+        else:
+            return item_list, incomplete_results
     
     def _username_token_check(self):
         """Checks if the Github username is associated with the provided access token, which is called when the user wants to include private repositories"""
@@ -117,21 +125,22 @@ class GithubProfile:
         """
         profile_url = f"{self._api_url}/users/{self.username}"
         response = self._request(profile_url)
-        profile_data = response.json()
-        return {
-            "login": profile_data["login"],
-            "name": profile_data["name"],
-            "company": profile_data["company"],
-            "blog": profile_data["blog"],
-            "location": profile_data["location"],
-            "email": profile_data["email"],
-            "hireable": profile_data["hireable"],
-            "twitter_username": profile_data["twitter_username"],
-            "avatar_url": profile_data["avatar_url"],
-            "bio": profile_data["bio"],
-            "followers": profile_data["followers"],
-            "following": profile_data["following"]
+        json_data = response.json()
+        profile =  {
+            "login": json_data["login"],
+            "name": json_data["name"],
+            "company": json_data["company"],
+            "blog": json_data["blog"],
+            "location": json_data["location"],
+            "email": json_data["email"],
+            "hireable": json_data["hireable"],
+            "twitter_username": json_data["twitter_username"],
+            "avatar_url": json_data["avatar_url"],
+            "bio": json_data["bio"],
+            "followers": json_data["followers"],
+            "following": json_data["following"]
         }
+        return profile
     
 
     def _repository_inference(self, top_repo_n=3, include_private=False):
@@ -150,7 +159,7 @@ class GithubProfile:
         else:
             repo_url = f"{self._api_url}/users/{self.username}/repos?per_page=100"
             
-        repos, repo_message = self._multipage_request(repo_url, "repos")
+        repos, incomplete_results = self._multipage_request(repo_url)
 
         repos.sort(
             key=lambda r: r["stargazers_count"] + r["forks_count"],
@@ -183,13 +192,15 @@ class GithubProfile:
             )
 
         stats = {
+            "incomplete_repo_results": incomplete_results,
+            "inference_from_repo_count": len(repos),
             "original_repo_count": len(original_repos),
             "forked_repo_count": len(forked_repos),
             "counts": counts,
             "top_repo_stars_forks": popular_repos,
         }
 
-        return {"stats": stats, "original_repos": original_repos, "repos": repos, "repo_api_message": repo_message}
+        return {"stats": stats, "original_repos": original_repos}
     
     def _contribution_inference(self, include_private=False):
         """Infer data regarding the user's Github contributions (issues and pull requests)
@@ -208,8 +219,8 @@ class GithubProfile:
             issue_url = f"{self._api_url}/search/issues?q=type:issue author:{self.username} is:public&sort=author-date&order=desc&per_page=100"
             pr_url = f"{self._api_url}/search/issues?q=type:pr author:{self.username} is:public&sort=author-date&order=desc&per_page=100"
             
-        issue_data, issue_message = self._multipage_request(issue_url, "issues", "items")
-        pr_data, pr_message = self._multipage_request(pr_url, "PRs", "items")
+        issue_data, incomplete_issue_results, _ = self._multipage_request(issue_url, "items")
+        pr_data, incomplete_pr_results, _ = self._multipage_request(pr_url, "items")
         issues, prs = [], []
 
         for i in issue_data:
@@ -248,20 +259,17 @@ class GithubProfile:
 
         contribution_count = dict(sorted(contribution_count.items(), key=lambda x: x[1], reverse=True))
         
-        contribution = {
-                        'issue_count': len(issues),
-                        'total_pr_count': len(prs),
+        contribution = {'incomplete_issue_results': incomplete_issue_results,
+                        'incomplete_pr_results': incomplete_pr_results,
+                        'inference_from_issue_count': len(issues),
+                        'inference_from_pr_count': len(prs),
                         'merged_pr_count': merged_pr_count,
                         'contribution_count_per_repo_owner': contribution_count,
-                        'created_issue': issues,
-                        'created_pr': prs,
-                        'issue_api_message': issue_message,
-                        'pr_api_message': pr_message
                         }
 
-        return {'contribution': contribution, 'issue_api_message': issue_message, 'pr_api_message': pr_message}
+        return contribution
     
-    def _activity_inference(self, original_repos, top_repo_n=3, include_private=False):
+    def _activity_inference(self, include_private=False):
         """Infer data regarding the user's Github activity (commits)
 
         Args:
@@ -277,7 +285,7 @@ class GithubProfile:
             commit_url = self._api_url + f"/search/commits?q=committer:{self.username}&sort=committer-date&order=desc&per_page=100"
         else:
             commit_url = self._api_url + f"/search/commits?q=committer:{self.username} is:public&sort=committer-date&order=desc&per_page=100"
-        commit_data, commit_message = self._multipage_request(commit_url, "commits", "items")
+        commit_data, incomplete_results, total_count = self._multipage_request(commit_url, "items")
 
         commits = []
         for c in commit_data:
@@ -285,10 +293,13 @@ class GithubProfile:
             "created_at": c["commit"]["committer"]["date"][:10],
             "repo_owner": c["repository"]["owner"]["login"],
             "repo_owner_type": c["repository"]["owner"]["type"],
-            "repo_name": c["repository"]["name"]})
-
+            "repo_name": c["repository"]["name"],
+            "html_url": c["repository"]["html_url"],
+            "description": c["repository"]["description"]
+            })
+        
+        one_year_ago = datetime.now() - timedelta(days=365)
         counts = {
-            "date": {},
             "day": {},
             "month": {},
             "owned_repo": {},
@@ -297,12 +308,21 @@ class GithubProfile:
             "repo_user_owner": {},
         }
         for c in commits:
-            c_date = c["created_at"]
-            c_day = datetime.strptime(c_date, "%Y-%m-%d").strftime("%a")
-            c_month = datetime.strptime(c_date, "%Y-%m-%d").strftime("%b")
-            counts["date"][c_date] = counts["date"].get(c_date, 0) + 1
-            counts["day"][c_day] = counts["day"].get(c_day, 0) + 1
-            counts["month"][c_month] = counts["month"].get(c_month, 0) + 1
+            c_date = datetime.strptime(c["created_at"], "%Y-%m-%d")
+            c_day = c_date.strftime("%a")
+            c_month = c_date.strftime("%b")
+            is_one_year_ago = c_date >= one_year_ago
+            
+            counts["day"][c_day] = counts["day"].get(c_day, [0, 0])
+            if is_one_year_ago:
+                counts["day"][c_day][0] += 1
+            counts["day"][c_day][1] += 1
+            
+            counts["month"][c_month] = counts["month"].get(c_month, [0, 0])
+            if is_one_year_ago:
+                counts["month"][c_month][0] += 1
+            counts["month"][c_month][1] += 1
+   
             repo_owner, repo_owner_type, repo_name = c["repo_owner"], c["repo_owner_type"], c["repo_name"]
             if repo_owner == self.username:
                 counts["owned_repo"][repo_name] = counts["owned_repo"].get(repo_name, 0) + 1
@@ -315,23 +335,25 @@ class GithubProfile:
         
         sorted_counts = {}
         for k in counts:
-            if k == 'date':
-                sorted_counts[k] = counts[k]
+            if k == "day" or k == "month":
+                sorted_counts[k] = dict(sorted(counts[k].items(), key=lambda item: item[1][0], reverse=True))
             else:
-                sorted_counts[k] = dict(sorted(counts[k].items(), key=lambda x: x[1], reverse=True))
-                
-        most_active_repo_name = list(sorted_counts['owned_repo'].keys())[:top_repo_n]
-        most_active_repo = []
-        for r in original_repos:
-            if r['name'] in most_active_repo_name:
-                most_active_repo.append({
-                    'name': r['name'],
-                    'html_url': r['html_url'],
-                    'description': r['description'],
-                    'top_language': r['language'],
-                    'commits_count': sorted_counts['owned_repo'][r['name']]
-                })
-                
+                sorted_counts[k] = dict(sorted(counts[k].items(), key=lambda item: item[1], reverse=True))
+        
+        other_repo_commits = []
+        for c in commits:
+            if c["repo_owner"] != self.username:
+                is_duplicated = any(r["repo_name"] == c["repo_name"] for r in other_repo_commits)
+            if not is_duplicated:
+                other_repo_commits.append({
+                    "repo_name": c["repo_name"],
+                    "owner": c["repo_owner"],
+                    "html_url": c["html_url"],
+                    "description": c["description"],
+                    "commits_count": sorted_counts["other_repo"][c["repo_name"]]
+                    })
+                other_repo_commits.sort(key=lambda x: x["commits_count"], reverse=True)
+        
         if len(commits) > 0:
             last_commit_date = datetime.strptime(commits[0]['created_at'], '%Y-%m-%d')
             first_commit_date = datetime.strptime(commits[-1]['created_at'], '%Y-%m-%d')
@@ -341,29 +363,26 @@ class GithubProfile:
             weekly_avg_commits = 0
             
         activity = {
-            'commit_count': len(commits),
-            'most_active_day': list(sorted_counts['day'].keys())[0] if len(commits) > 0 else None,
-            'most_active_month': list(sorted_counts['month'].keys())[0] if len(commits) > 0 else None,
+            'commit_count': total_count,
+            'incomplete_commit_results': incomplete_results,
+            'inferece_from_commit_count': len(commits),
             'weekly_average_commits': weekly_avg_commits,
             'commit_count_per_day': sorted_counts['day'],
             'commit_count_per_month': sorted_counts['month'],
             'commit_count_per_owned_repo': sorted_counts['owned_repo'],
-            'commit_count_per_other_repo': sorted_counts['other_repo'],
+            'commit_count_per_other_repo': other_repo_commits,
             'commit_count_per_repo_org_owner': sorted_counts['repo_org_owner'],
             'commit_count_per_repo_user_owner': sorted_counts['repo_user_owner'],
-            'commit_api_message': commit_message
         }
 
-        return {'activity': activity, 'most_active_repo': most_active_repo, 'commit_api_message': commit_message}
+        return activity
     
-    def _skill_inference(self, bio, original_repos, repo_message, top_language_n=3):
+    def _skill_inference(self, bio, original_repos, top_language_n=3):
         """Infer data regarding the user's skills from their Github bio and repositories.
 
         Args:
             bio (str): The user's Github bio
             original_repos (dict): Original repository data (from _repo_inference)
-            repo_message (str): Message from _repo_inference
-            top_language_n (int): Number of top languages to be included in the inference. Defaults to 3.
 
         Returns:
             dict: Inferred data regarding the user's skills
@@ -412,14 +431,16 @@ class GithubProfile:
             for r in original_repos:
                 languages_count[r["language"]] = languages_count.get(r["language"], 0) + 1
             sorted_languages = sorted(languages_count, key=languages_count.get, reverse=True)
-            languages_percentage = "Sorry, it looks like the information you're requesting is only available for authenticated requests 😔"
+            languages_percentage = None
         
-        return {
+        skill = {
+            "inference_from_originalrepo_count": len(original_repos),
             "key_qualifications": key_qualifications, 
             "top_n_languages": sorted_languages[:top_language_n], 
             "languages_percentage": languages_percentage,
-            "repo_api_message": repo_message
             }
+        
+        return skill
     
     def perform_inference(self, top_repo_n=3, top_language_n=3, include_private=False):
         """Perform inference on the user's Github profile. This will print out a dictionary that includes data and statistics regarding their profile, repository, skill, activity, and contribution. The dictionary will also be stored in the inference attribute.
@@ -431,8 +452,8 @@ class GithubProfile:
         """
         profile = self._profile_inference()
         repository = self._repository_inference(top_repo_n=top_repo_n, include_private=include_private)
-        skill = self._skill_inference(bio=profile['bio'], original_repos=repository['original_repos'], repo_message=repository['repo_api_message'], top_language_n=top_language_n)
-        activity = self._activity_inference(original_repos=repository['original_repos'], top_repo_n=top_repo_n, include_private=include_private)
+        skill = self._skill_inference(bio=profile['bio'], original_repos=repository['original_repos'], top_language_n=top_language_n)
+        activity = self._activity_inference(include_private=include_private)
         contribution = self._contribution_inference(include_private=include_private)
         
         self.inference = {
