@@ -202,11 +202,11 @@ class GithubProfile:
 
         return {"stats": stats, "original_repos": original_repos}
     
-    def _contribution_inference(self, original_repo, include_private=False):
+    def _contribution_inference(self, original_repos, include_private=False):
         """Infers a user's contributions (issue + PR) to repositories on GitHub.
 
         Args:
-            original_repo(list): Original repository data from _repository_inference().
+            original_repos (dict): Original repository data from _repository_inference()
             include_private (bool, optional): Whether to include private repositories in the inference. Defaults to False.
 
         Returns:
@@ -249,7 +249,7 @@ class GithubProfile:
         contribution_count = dict(sorted(contribution_count.items(), key=lambda x: x[1], reverse=True))
         
         data_contrib = []
-        for r in original_repo[:10]:
+        for r in original_repos[:10]:
             repo_data, incomplete_repo_results = self._multipage_request(r['contributors_url'])
             data_contrib.extend(repo_data)
         
@@ -276,8 +276,6 @@ class GithubProfile:
         """Infer data regarding the user's Github activity (commits)
 
         Args:
-            original_repos (dict): Original repository data (from _repo_inference)
-            top_repo_n (int, optional): Number of top repositories to be included in the inference. Defaults to 3.
             include_private (bool, optional): Whether to include private repositories in the inference. Defaults to False.
 
         Returns:
@@ -385,7 +383,8 @@ class GithubProfile:
 
         Args:
             bio (str): The user's Github bio
-            original_repos (dict): Original repository data (from _repo_inference)
+            original_repos (dict): Original repository data from _repository_inference()
+            top_language_n (int, optional): The number of top languages to consider. Defaults to 3.
 
         Returns:
             dict: Inferred data regarding the user's skills
@@ -457,7 +456,7 @@ class GithubProfile:
         repository = self._repository_inference(top_repo_n=top_repo_n, include_private=include_private)
         skill = self._skill_inference(bio=profile['bio'], original_repos=repository['original_repos'], top_language_n=top_language_n)
         activity = self._activity_inference(include_private=include_private)
-        contribution = self._contribution_inference(include_private=include_private)
+        contribution = self._contribution_inference(original_repos=repository['original_repos'], include_private=include_private)
         
         self.inference = {
             "profile": profile,
