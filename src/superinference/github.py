@@ -345,15 +345,15 @@ class GithubProfile:
         for c in commits:
             if c["repo_owner"] != self.username:
                 is_duplicated = any(r["repo_name"] == c["repo_name"] for r in other_repo_commits)
-            if not is_duplicated:
-                other_repo_commits.append({
-                    "repo_name": c["repo_name"],
-                    "owner": c["repo_owner"],
-                    "html_url": c["html_url"],
-                    "description": c["description"],
-                    "commits_count": sorted_counts["other_repo"][c["repo_name"]]
-                    })
-                other_repo_commits.sort(key=lambda x: x["commits_count"], reverse=True)
+                if not is_duplicated:
+                    other_repo_commits.append({
+                        "repo_name": c["repo_name"],
+                        "owner": c["repo_owner"],
+                        "html_url": c["html_url"],
+                        "description": c["description"],
+                        "commits_count": sorted_counts["other_repo"][c["repo_name"]]
+                        })
+                    other_repo_commits.sort(key=lambda x: x["commits_count"], reverse=True)
         
         if len(commits) > 0:
             last_commit_date = datetime.strptime(commits[0]['created_at'], '%Y-%m-%d')
