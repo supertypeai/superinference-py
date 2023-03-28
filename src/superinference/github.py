@@ -202,10 +202,11 @@ class GithubProfile:
 
         return {"stats": stats, "original_repos": original_repos}
     
-    def _contribution_inference(self, include_private=False):
-        """Infer data regarding the user's Github contributions (issues and pull requests)
+    def _contribution_inference(self, original_repo, include_private=False):
+        """Infers a user's contributions (issue + PR) to repositories on GitHub.
 
         Args:
+            original_repo(list): Original repository data from _repository_inference().
             include_private (bool, optional): Whether to include private repositories in the inference. Defaults to False.
 
         Returns:
@@ -227,27 +228,15 @@ class GithubProfile:
             if i['author_association'] != 'OWNER':
                 split_url = i['html_url'].split('/')
                 issues.append({
-                    'issue_title': i['title'],
-                    'created_at': i['created_at'],
-                    'state': i['state'],
-                    'state_reason': i['state_reason'],
                     'repo_owner': split_url[3],
-                    'repo_name': split_url[4],
-                    'repo_url': f'https://github.com/{split_url[3]}/{split_url[4]}'
                 })
 
         for p in pr_data:
             if p['author_association'] != 'OWNER':
                 split_url = p['html_url'].split('/')
                 prs.append({
-                    'pr_title': p['title'],
-                    'created_at': p['created_at'],
                     'merged_at': p['pull_request']['merged_at'],
-                    'state': p['state'],
-                    'state_reason': p['state_reason'],
                     'repo_owner': split_url[3],
-                    'repo_name': split_url[4],
-                    'repo_url': f'https://github.com/{split_url[3]}/{split_url[4]}'
                 })
                 
         merged_pr_count = len([p for p in prs if p['merged_at']])
@@ -259,12 +248,26 @@ class GithubProfile:
 
         contribution_count = dict(sorted(contribution_count.items(), key=lambda x: x[1], reverse=True))
         
+        data_contrib = []
+        for r in original_repo[:10]:
+            repo_data, incomplete_repo_results = self._multipage_request(r['contributors_url'])
+            data_contrib.extend(repo_data)
+        
+        incoming_contribution = {}
+        for d in data_contrib:
+            login = d['login']
+            if login != self.username:
+                incoming_contribution[login] = incoming_contribution.get(login, 0) + 1
+        
+        incoming_contribution = dict(sorted(incoming_contribution.items(), key=lambda x: x[1], reverse=True))
+
         contribution = {'incomplete_issue_results': incomplete_issue_results,
                         'incomplete_pr_results': incomplete_pr_results,
                         'inference_from_issue_count': len(issues),
                         'inference_from_pr_count': len(prs),
                         'merged_pr_count': merged_pr_count,
-                        'contribution_count_per_repo_owner': contribution_count,
+                        'self_contribution_to_external': contribution_count,
+                        'external_contribution_to_self': incoming_contribution
                         }
 
         return contribution
