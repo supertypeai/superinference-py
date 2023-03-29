@@ -246,11 +246,12 @@ class GithubProfile:
             repo_owner = ip['repo_owner']
             contribution_count[repo_owner] = contribution_count.get(repo_owner, 0) + 1
 
-        contribution_count = dict(sorted(contribution_count.items(), key=lambda x: x[1], reverse=True))
+        contribution_count = dict(sorted(contribution_count.items(), key=lambda item: item[1], reverse=True))
         
         data_contrib = []
         for r in original_repos[:10]:
-            repo_data, incomplete_repo_results = self._multipage_request(r['contributors_url'])
+            response = self._request(r['contributors_url'])
+            repo_data = response.json()
             data_contrib.extend(repo_data)
         
         incoming_contribution = {}
@@ -259,7 +260,7 @@ class GithubProfile:
             if login != self.username:
                 incoming_contribution[login] = incoming_contribution.get(login, 0) + 1
         
-        incoming_contribution = dict(sorted(incoming_contribution.items(), key=lambda x: x[1], reverse=True))
+        incoming_contribution = dict(sorted(incoming_contribution.items(), key=lambda item: item[1], reverse=True))
 
         contribution = {'incomplete_issue_results': incomplete_issue_results,
                         'incomplete_pr_results': incomplete_pr_results,
