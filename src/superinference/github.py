@@ -20,6 +20,36 @@ class GithubProfile:
         self.inference = None
         self._api_url = "https://api.github.com"
 
+    def _error_handling(self, response, graphql=False):
+        """Handles errors from the Github API
+
+        Args:
+            response (requests.models.Response): Response from the Github API
+
+        Returns:
+            requests.models.Response: Response from the Github API, if no errors are found
+        """
+        if response.status_code == 200:
+            if graphql:
+                json_data = response.json()
+                if "errors" in json_data and json_data["errors"][0]["message"]:
+                    raise Exception(f"GraphQL API query error - \"{json_data['errors'][0]['message']}\"")
+            return response
+        elif response.status_code == 401:
+            if self.access_token:    
+                raise Exception("Invalid access token. Please check your access token and try again.")
+            else:
+                raise Exception("This feature requires an access token. Please provide an access token and try again.")
+        elif response.status_code == 403:
+            if self.access_token:
+                raise Exception("API rate limit exceeded, please try again later.")
+            else:
+                raise Exception("API rate limit exceeded, please provide an access token to increase rate limit.")
+        elif response.status_code == 404:
+            raise Exception("Invalid GitHub username inputted.")
+        else:
+            raise Exception(f"Error with status code of: {response.status_code}")
+        
     def _request(self, url, error_handling=True):
         """Makes a request to the Github API
 
@@ -28,7 +58,7 @@ class GithubProfile:
             error_handling (bool, optional): Whether to handle errors or not before returning the response. Defaults to True.
 
         Returns:
-            str: Response from the API
+            requests.models.Response: Response from the Github API
         """
         if self.access_token:
             headers = {"Authorization": "token {}".format(self.access_token)}
@@ -37,22 +67,7 @@ class GithubProfile:
             response = requests.get(url)
             
         if error_handling:
-            if response.status_code == 200:
-                return response
-            elif response.status_code == 401:
-                if self.access_token:    
-                    raise Exception("Invalid access token. Please check your access token and try again.")
-                else:
-                    raise Exception("This feature requires an access token. Please provide an access token and try again.")
-            elif response.status_code == 403:
-                if self.access_token:
-                    raise Exception("API rate limit exceeded, please try again later.")
-                else:
-                    raise Exception("API rate limit exceeded, please provide an access token to increase rate limit.")
-            elif response.status_code == 404:
-                raise Exception("Invalid GitHub username inputted.")
-            else:
-                raise Exception(f"Error with status code of: {response.status_code}")
+            return self._error_handling(response)
         else:
             return response
     
@@ -117,16 +132,33 @@ class GithubProfile:
         if associated_username != self.username:
             raise Exception("If you want to include private repositories, please ensure that the Github username is associated with the provided access token.")
         
+    def _graphql_request(self, query):
+        """Makes a request to the Github GraphQL API
+
+        Args:
+            query (str): GraphQL query to be requested
+
+        Returns:
+            requests.models.Response: Response from the Github GraphQL API
+        """
+        url = f"{self._api_url}/graphql"
+        if self.access_token:
+            headers = {"Authorization": "token {}".format(self.access_token)}
+            response = requests.post(url, headers=headers, json={"query": query})
+        else:
+            response = requests.post(url)
+        return self._error_handling(response, graphql=True)
+        
     def _profile_inference(self):
         """Infer data regarding the user's Github profile
 
         Returns:
-            dict: Github profile data
+            dict: Github profile data and creation date
         """
         profile_url = f"{self._api_url}/users/{self.username}"
         response = self._request(profile_url)
         json_data = response.json()
-        profile =  {
+        profile_data =  {
             "login": json_data["login"],
             "name": json_data["name"],
             "company": json_data["company"],
@@ -140,7 +172,7 @@ class GithubProfile:
             "followers": json_data["followers"],
             "following": json_data["following"]
         }
-        return profile
+        return {"data": profile_data, "created_at": json_data['created_at']}
     
 
     def _repository_inference(self, top_repo_n=3, include_private=False):
@@ -151,7 +183,7 @@ class GithubProfile:
             include_private (bool, optional): Whether to include private repositories in the inference. Defaults to False.
 
         Returns:
-            dict: Github repository data and statistics
+            dict: Github repository statistics and list of original repositories
         """
         if include_private:
             self._username_token_check()
@@ -202,182 +234,211 @@ class GithubProfile:
 
         return {"stats": stats, "original_repos": original_repos}
     
-    def _contribution_inference(self, original_repos, include_private=False):
-        """Infers a user's contributions (issue + PR) to repositories on GitHub.
+    def _contribution_inference(self, created_profile_date, original_repos):
+        """Infers data regarding a user's contributions to repositories on GitHub.
 
         Args:
-            original_repos (dict): Original repository data from _repository_inference()
-            include_private (bool, optional): Whether to include private repositories in the inference. Defaults to False.
+            created_profile_date (str): The user's Github profile creation date (from `_profile_inference()`)
+            original_repos (list): Original repository data (from `_repository_inference()`)
 
         Returns:
-            dict: Github contribution data and statistics
+            dict: Github contribution statistics
         """
-        if include_private:
-            self._username_token_check()
-            issue_url = f"{self._api_url}/search/issues?q=type:issue author:{self.username}&sort=author-date&order=desc&per_page=100"
-            pr_url = f"{self._api_url}/search/issues?q=type:pr author:{self.username}&sort=author-date&order=desc&per_page=100"
-        else:
-            issue_url = f"{self._api_url}/search/issues?q=type:issue author:{self.username} is:public&sort=author-date&order=desc&per_page=100"
-            pr_url = f"{self._api_url}/search/issues?q=type:pr author:{self.username} is:public&sort=author-date&order=desc&per_page=100"
+        if not self.access_token:
+            return None
+        
+        created_date = datetime.strptime(created_profile_date, "%Y-%m-%dT%H:%M:%SZ")
+        created_year = created_date.year
+        today = datetime.now()
+        current_year = today.year
+        
+        def query_pattern_day(start_date, end_date):
+            return f"""
+                query {{
+                    user(login: "{self.username}") {{
+                        contributionsCollection(from: "{start_date.isoformat()}", to: "{end_date.isoformat()}") {{
+                            contributionCalendar {{
+                                totalContributions
+                                weeks {{
+                                    contributionDays {{
+                                        date
+                                        contributionCount
+                                    }}
+                                }}
+                            }}
+                        }}
+                    }}
+                }}
+            """
+        
+        contribution_detail = """
+            repository {
+                description
+                name
+                url
+                languages(first: 1, orderBy: {field: SIZE, direction: DESC}) {
+                    nodes {
+                        name
+                    }
+                }
+                owner {
+                    __typename
+                    ... on User {
+                        login
+                    }
+                    ... on Organization {
+                        login
+                    }
+                }
+            }
+            contributions {
+                totalCount
+            }
+        """
+        
+        def query_pattern_repo(start_date, end_date):
+            return f"""
+                query {{
+                    user(login: "{self.username}") {{
+                        contributionsCollection(from: "{start_date.isoformat()}", to: "{end_date.isoformat()}") {{
+                            commitContributionsByRepository(maxRepositories: 100) {{
+                                {contribution_detail}
+                            }}
+                            issueContributionsByRepository(maxRepositories: 100) {{
+                                {contribution_detail}
+                            }}
+                            pullRequestContributionsByRepository(maxRepositories: 100) {{
+                                {contribution_detail}
+                            }}
+                            pullRequestReviewContributionsByRepository(maxRepositories: 100) {{
+                                {contribution_detail}
+                            }}
+                        }}
+                    }}
+                }}
+            """
+        
+        contributions_per_day = []
+        contributions_per_repo = []
+        contributions_count = 0
+        for i in range(created_year, current_year + 1):
+            if i == created_year:
+                query_day = query_pattern_day(created_date, datetime(i, 12, 31))
+                query_repo = query_pattern_repo(created_date, datetime(i, 12, 31))
+            elif i == current_year:
+                query_day = query_pattern_day(datetime(i, 1, 1), today)
+                query_repo = query_pattern_repo(datetime(i, 1, 1), today)
+            else:
+                query_day = query_pattern_day(datetime(i, 1, 1), datetime(i, 12, 31))
+                query_repo = query_pattern_repo(datetime(i, 1, 1), datetime(i, 12, 31))
+
+            response_day = self._graphql_request(query_day)
+            data_day = response_day.json()['data']
+            new_contribution_day=[]
+            for week in data_day["user"]["contributionsCollection"]["contributionCalendar"]["weeks"]:
+                new_contribution_day.extend([day for day in week["contributionDays"]])
+            contributions_per_day.extend(new_contribution_day)
+            contributions_count += data_day["user"]["contributionsCollection"]["contributionCalendar"]["totalContributions"]
+
+            response_repo = self._graphql_request(query_repo)
+            data_repo = response_repo.json()['data']
+            def extract_repo_detail(repository, contributions):
+                return {
+                    "name": repository['name'],
+                    "owner": repository['owner']['login'],
+                    "owner_type": repository['owner']["__typename"],
+                    "html_url": repository['url'],
+                    "description": repository['description'],
+                    "top_language": repository['languages']['nodes'][0]['name'].lower().replace(" ", "-") if repository['languages']['nodes'] else None,
+                    "contributions_count": contributions['totalCount']
+                }
+            new_commits = [extract_repo_detail(item['repository'], item['contributions']) for item in data_repo['user']['contributionsCollection']['commitContributionsByRepository']]
+            new_issues = [extract_repo_detail(item['repository'], item['contributions']) for item in data_repo['user']['contributionsCollection']['issueContributionsByRepository']]
+            new_pr = [extract_repo_detail(item['repository'], item['contributions']) for item in data_repo['user']['contributionsCollection']['pullRequestContributionsByRepository']]
+            new_pr_review = [extract_repo_detail(item['repository'], item['contributions']) for item in data_repo['user']['contributionsCollection']['pullRequestReviewContributionsByRepository']]
+            contributions_per_repo.extend(new_commits + new_issues + new_pr + new_pr_review)
             
-        issue_data, incomplete_issue_results, _ = self._multipage_request(issue_url, "items")
-        pr_data, incomplete_pr_results, _ = self._multipage_request(pr_url, "items")
-        issues, prs = [], []
+        one_year_ago = datetime.now() - timedelta(days=365)
+        count = {"day": {}, "month": {}}
+        for c in contributions_per_day:
+            c_date = datetime.strptime(c["date"], "%Y-%m-%d")
+            c_day = c_date.strftime("%a")
+            c_month = c_date.strftime("%b")
+            is_one_year_ago = c_date >= one_year_ago
+            
+            count["day"][c_day] = count["day"].get(c_day, [0, 0])
+            if is_one_year_ago:
+                count["day"][c_day][0] += c['contributionCount']
+            count["day"][c_day][1] +=  c['contributionCount']
+            
+            count["month"][c_month] = count["month"].get(c_month, [0, 0])
+            if is_one_year_ago:
+                count["month"][c_month][0] += c['contributionCount']
+            count["month"][c_month][1] += c['contributionCount']
+            
+        final_count = {
+            "day": count["day"],
+            "month": count["month"],
+            "owned_repo": {},
+            "other_repo": [],
+            "User": {},
+            "Organization": {},
+        }
+        
+        for c in contributions_per_repo:
+            repo_type = "owned_repo" if c['owner'] == self.username else "other_repo"
 
-        for i in issue_data:
-            if i['author_association'] != 'OWNER':
-                split_url = i['html_url'].split('/')
-                issues.append({
-                    'repo_owner': split_url[3],
-                })
+            if repo_type == "owned_repo":
+                final_count[repo_type][c['name']] = final_count[repo_type].get(c['name'], 0) + c['contributions_count']
+            else:
+                index = next((i for i, obj in enumerate(final_count[repo_type]) if obj["name"] == c['name']), -1)
+                if index == -1:
+                    data = {k: v for k, v in c.items() if k != "owner_type"}
+                    final_count[repo_type].append(data)             
+                else:
+                    final_count[repo_type][index]["contributions_count"] += c['contributions_count']      
 
-        for p in pr_data:
-            if p['author_association'] != 'OWNER':
-                split_url = p['html_url'].split('/')
-                prs.append({
-                    'merged_at': p['pull_request']['merged_at'],
-                    'repo_owner': split_url[3],
-                })
-                
-        merged_pr_count = len([p for p in prs if p['merged_at']])
-
-        contribution_count = {}
-        for ip in issues + prs:
-            repo_owner = ip['repo_owner']
-            contribution_count[repo_owner] = contribution_count.get(repo_owner, 0) + 1
-
-        contribution_count = dict(sorted(contribution_count.items(), key=lambda item: item[1], reverse=True))
+            final_count[c['owner_type']][c['owner']] = final_count[c['owner_type']].get(c['owner'], 0) + c['contributions_count']
+            
+        sorted_count = {}
+        for k, v in final_count.items():
+            if k == "day" or k == "month":
+                sorted_count[k] = dict(sorted(v.items(), key=lambda item: item[1][0], reverse=True))
+            elif k == "other_repo":
+                sorted_count[k] = sorted(v, key=lambda v: v["contributions_count"], reverse=True)
+            else:
+                sorted_count[k] = dict(sorted(v.items(), key=lambda item: item[1], reverse=True))
+            
+        total_weeks = round((today - created_date).days / 7)
+        weekly_avg_contributions = round(contributions_count / total_weeks, 3)
         
         data_contrib = []
         for r in original_repos[:10]:
             response = self._request(r['contributors_url'])
             repo_data = response.json()
             data_contrib.extend(repo_data)
-        
+
         incoming_contribution = {}
         for d in data_contrib:
             login = d['login']
             if login != self.username:
-                incoming_contribution[login] = incoming_contribution.get(login, 0) + 1
+                incoming_contribution[login] = incoming_contribution.get(login, 0) + d['contributions']
+
+        sorted_incoming_contribution = dict(sorted(incoming_contribution.items(), key=lambda item: item[1], reverse=True))
         
-        incoming_contribution = dict(sorted(incoming_contribution.items(), key=lambda item: item[1], reverse=True))
-
-        contribution = {'incomplete_issue_results': incomplete_issue_results,
-                        'incomplete_pr_results': incomplete_pr_results,
-                        'inference_from_issue_count': len(issues),
-                        'inference_from_pr_count': len(prs),
-                        'merged_pr_count': merged_pr_count,
-                        'self_contribution_to_external': contribution_count,
-                        'external_contribution_to_self': incoming_contribution
-                        }
-
+        contribution = {
+            'contribution_count': contributions_count,
+            'weekly_average_contribution': weekly_avg_contributions,
+            'contribution_count_per_day': sorted_count["day"],
+            'contribution_count_per_month': sorted_count["month"],
+            'contribution_count_per_owned_repo': sorted_count["owned_repo"],
+            'contribution_count_per_other_repo': sorted_count["other_repo"],
+            'contribution_count_per_repo_org_owner': sorted_count["Organization"],
+            'contribution_count_per_repo_user_owner': sorted_count["User"],
+            'external_contribution_to_top_10_repo': sorted_incoming_contribution
+        }
+        
         return contribution
-    
-    def _activity_inference(self, include_private=False):
-        """Infer data regarding the user's Github activity (commits)
-
-        Args:
-            include_private (bool, optional): Whether to include private repositories in the inference. Defaults to False.
-
-        Returns:
-            dict: Github activity data and statistics
-        """
-        if include_private:
-            self._username_token_check()
-            commit_url = self._api_url + f"/search/commits?q=committer:{self.username}&sort=committer-date&order=desc&per_page=100"
-        else:
-            commit_url = self._api_url + f"/search/commits?q=committer:{self.username} is:public&sort=committer-date&order=desc&per_page=100"
-        commit_data, incomplete_results, total_count = self._multipage_request(commit_url, "items")
-
-        commits = []
-        for c in commit_data:
-            commits.append({
-            "created_at": c["commit"]["committer"]["date"][:10],
-            "repo_owner": c["repository"]["owner"]["login"],
-            "repo_owner_type": c["repository"]["owner"]["type"],
-            "repo_name": c["repository"]["name"],
-            "html_url": c["repository"]["html_url"],
-            "description": c["repository"]["description"]
-            })
-        
-        one_year_ago = datetime.now() - timedelta(days=365)
-        counts = {
-            "day": {},
-            "month": {},
-            "owned_repo": {},
-            "other_repo": {},
-            "repo_org_owner": {},
-            "repo_user_owner": {},
-        }
-        for c in commits:
-            c_date = datetime.strptime(c["created_at"], "%Y-%m-%d")
-            c_day = c_date.strftime("%a")
-            c_month = c_date.strftime("%b")
-            is_one_year_ago = c_date >= one_year_ago
-            
-            counts["day"][c_day] = counts["day"].get(c_day, [0, 0])
-            if is_one_year_ago:
-                counts["day"][c_day][0] += 1
-            counts["day"][c_day][1] += 1
-            
-            counts["month"][c_month] = counts["month"].get(c_month, [0, 0])
-            if is_one_year_ago:
-                counts["month"][c_month][0] += 1
-            counts["month"][c_month][1] += 1
-   
-            repo_owner, repo_owner_type, repo_name = c["repo_owner"], c["repo_owner_type"], c["repo_name"]
-            if repo_owner == self.username:
-                counts["owned_repo"][repo_name] = counts["owned_repo"].get(repo_name, 0) + 1
-            else:
-                counts["other_repo"][repo_name] = counts["other_repo"].get(repo_name, 0) + 1
-            if repo_owner_type == "Organization":
-                counts["repo_org_owner"][repo_owner] = counts["repo_org_owner"].get(repo_owner, 0) + 1
-            else:
-                counts["repo_user_owner"][repo_owner] = counts["repo_user_owner"].get(repo_owner, 0) + 1
-        
-        sorted_counts = {}
-        for k in counts:
-            if k == "day" or k == "month":
-                sorted_counts[k] = dict(sorted(counts[k].items(), key=lambda item: item[1][0], reverse=True))
-            else:
-                sorted_counts[k] = dict(sorted(counts[k].items(), key=lambda item: item[1], reverse=True))
-        
-        other_repo_commits = []
-        for c in commits:
-            if c["repo_owner"] != self.username:
-                is_duplicated = any(r["repo_name"] == c["repo_name"] for r in other_repo_commits)
-                if not is_duplicated:
-                    other_repo_commits.append({
-                        "repo_name": c["repo_name"],
-                        "owner": c["repo_owner"],
-                        "html_url": c["html_url"],
-                        "description": c["description"],
-                        "commits_count": sorted_counts["other_repo"][c["repo_name"]]
-                        })
-                    other_repo_commits.sort(key=lambda x: x["commits_count"], reverse=True)
-        
-        if len(commits) > 0:
-            last_commit_date = datetime.strptime(commits[0]['created_at'], '%Y-%m-%d')
-            first_commit_date = datetime.strptime(commits[-1]['created_at'], '%Y-%m-%d')
-            total_weeks = round((last_commit_date - first_commit_date).days / 7)
-            weekly_avg_commits = round(len(commits) / total_weeks, 3)
-        else:
-            weekly_avg_commits = 0
-            
-        activity = {
-            'commit_count': total_count,
-            'incomplete_commit_results': incomplete_results,
-            'inferece_from_commit_count': len(commits),
-            'weekly_average_commits': weekly_avg_commits,
-            'commit_count_per_day': sorted_counts['day'],
-            'commit_count_per_month': sorted_counts['month'],
-            'commit_count_per_owned_repo': sorted_counts['owned_repo'],
-            'commit_count_per_other_repo': other_repo_commits,
-            'commit_count_per_repo_org_owner': sorted_counts['repo_org_owner'],
-            'commit_count_per_repo_user_owner': sorted_counts['repo_user_owner'],
-        }
-
-        return activity
     
     def _skill_inference(self, bio, original_repos, top_language_n=3):
         """Infer data regarding the user's skills from their Github bio and repositories.
@@ -427,12 +488,14 @@ class GithubProfile:
                 response = self._request(r["languages_url"])
                 r_lang = response.json()
                 for key in r_lang.keys():
-                    languages_count[key] = languages_count.get(key, 0) + 1
+                    formatted_key = key.replace(" ", "-").lower()
+                    languages_count[formatted_key] = languages_count.get(formatted_key, 0) + 1
             sorted_languages = sorted(languages_count, key=languages_count.get, reverse=True)
             languages_percentage = {lang: round(languages_count[lang] / len(original_repos), 3) for lang in sorted_languages}
         else:
             for r in original_repos:
-                languages_count[r["language"]] = languages_count.get(r["language"], 0) + 1
+                formatted_lang = r["language"].replace(" ", "-").lower()
+                languages_count[formatted_lang] = languages_count.get(formatted_lang, 0) + 1
             sorted_languages = sorted(languages_count, key=languages_count.get, reverse=True)
             languages_percentage = None
         
@@ -455,16 +518,21 @@ class GithubProfile:
         """
         profile = self._profile_inference()
         repository = self._repository_inference(top_repo_n=top_repo_n, include_private=include_private)
-        skill = self._skill_inference(bio=profile['bio'], original_repos=repository['original_repos'], top_language_n=top_language_n)
-        activity = self._activity_inference(include_private=include_private)
-        contribution = self._contribution_inference(original_repos=repository['original_repos'], include_private=include_private)
+        skill = self._skill_inference(bio=profile['data']['bio'], original_repos=repository['original_repos'], top_language_n=top_language_n)
+        contribution = self._contribution_inference(created_profile_date=profile['created_at'], original_repos=repository['original_repos'])
         
         self.inference = {
-            "profile": profile,
+            "profile": profile['data'],
             "skill": skill,
             "stats": repository["stats"],
-            "activity": activity,
+            # "activity": activity,
             "contribution": contribution
         }
         
         console.print(self.inference)
+
+if __name__ == "__main__":
+    username = input("Enter Github username: ")
+    access_token = input("Enter Github access token: ")
+    profile = GithubProfile(username=username, access_token=access_token)
+    profile.perform_inference()
