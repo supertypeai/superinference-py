@@ -530,9 +530,3 @@ class GithubProfile:
         }
         
         console.print(self.inference)
-
-if __name__ == "__main__":
-    username = input("Enter Github username: ")
-    access_token = input("Enter Github access token: ")
-    profile = GithubProfile(username=username, access_token=access_token)
-    profile.perform_inference()
