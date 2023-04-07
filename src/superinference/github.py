@@ -494,8 +494,9 @@ class GithubProfile:
             languages_percentage = {lang: round(languages_count[lang] / len(original_repos), 3) for lang in sorted_languages}
         else:
             for r in original_repos:
-                formatted_lang = r["language"].replace(" ", "-").lower()
-                languages_count[formatted_lang] = languages_count.get(formatted_lang, 0) + 1
+                if r['language']:
+                    formatted_lang = r["language"].replace(" ", "-").lower()
+                    languages_count[formatted_lang] = languages_count.get(formatted_lang, 0) + 1
             sorted_languages = sorted(languages_count, key=languages_count.get, reverse=True)
             languages_percentage = None
         
