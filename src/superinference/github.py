@@ -234,12 +234,13 @@ class GithubProfile:
 
         return {"stats": stats, "original_repos": original_repos}
     
-    def _contribution_inference(self, created_profile_date, original_repos):
+    def _contribution_inference(self, created_profile_date, original_repos, include_private=False):
         """Infers data regarding a user's contributions to repositories on GitHub.
 
         Args:
             created_profile_date (str): The user's Github profile creation date (from `_profile_inference()`)
             original_repos (list): Original repository data (from `_repository_inference()`)
+            include_private (bool, optional): Whether to include private repositories in the inference. Defaults to False.
 
         Returns:
             dict: Github contribution statistics
@@ -290,6 +291,7 @@ class GithubProfile:
                         login
                     }
                 }
+                isPrivate
             }
             contributions {
                 totalCount
@@ -350,13 +352,17 @@ class GithubProfile:
                     "html_url": repository['url'],
                     "description": repository['description'],
                     "top_language": repository['languages']['nodes'][0]['name'].lower().replace(" ", "-") if repository['languages']['nodes'] else None,
-                    "contributions_count": contributions['totalCount']
+                    "contributions_count": contributions['totalCount'],
+                    "is_private": repository['isPrivate']
                 }
             new_commits = [extract_repo_detail(item['repository'], item['contributions']) for item in data_repo['user']['contributionsCollection']['commitContributionsByRepository']]
             new_issues = [extract_repo_detail(item['repository'], item['contributions']) for item in data_repo['user']['contributionsCollection']['issueContributionsByRepository']]
             new_pr = [extract_repo_detail(item['repository'], item['contributions']) for item in data_repo['user']['contributionsCollection']['pullRequestContributionsByRepository']]
             new_pr_review = [extract_repo_detail(item['repository'], item['contributions']) for item in data_repo['user']['contributionsCollection']['pullRequestReviewContributionsByRepository']]
             contributions_per_repo.extend(new_commits + new_issues + new_pr + new_pr_review)
+            
+        if not include_private:
+            contributions_per_repo = [repo for repo in contributions_per_repo if not repo['is_private']]
             
         one_year_ago = datetime.now() - timedelta(days=365)
         count = {"day": {}, "month": {}}
@@ -393,7 +399,7 @@ class GithubProfile:
             else:
                 index = next((i for i, obj in enumerate(final_count[repo_type]) if obj['html_url'] == c['html_url']), -1)
                 if index == -1:
-                    data = {k: v for k, v in c.items() if k != "owner_type"}
+                    data = {k: v for k, v in c.items() if k not in ["owner_type", "is_private"]}
                     final_count[repo_type].append(data)             
                 else:
                     final_count[repo_type][index]["contributions_count"] += c['contributions_count']      
@@ -520,7 +526,7 @@ class GithubProfile:
         profile = self._profile_inference()
         repository = self._repository_inference(top_repo_n=top_repo_n, include_private=include_private)
         skill = self._skill_inference(bio=profile['data']['bio'], original_repos=repository['original_repos'], top_language_n=top_language_n)
-        contribution = self._contribution_inference(created_profile_date=profile['created_at'], original_repos=repository['original_repos'])
+        contribution = self._contribution_inference(created_profile_date=profile['created_at'], original_repos=repository['original_repos'], include_private=include_private)
         
         self.inference = {
             "profile": profile['data'],
