@@ -391,7 +391,7 @@ class GithubProfile:
             if repo_type == "owned_repo":
                 final_count[repo_type][c['name']] = final_count[repo_type].get(c['name'], 0) + c['contributions_count']
             else:
-                index = next((i for i, obj in enumerate(final_count[repo_type]) if obj["name"] == c['name']), -1)
+                index = next((i for i, obj in enumerate(final_count[repo_type]) if obj['html_url'] == c['html_url']), -1)
                 if index == -1:
                     data = {k: v for k, v in c.items() if k != "owner_type"}
                     final_count[repo_type].append(data)             
@@ -399,7 +399,7 @@ class GithubProfile:
                     final_count[repo_type][index]["contributions_count"] += c['contributions_count']      
 
             final_count[c['owner_type']][c['owner']] = final_count[c['owner_type']].get(c['owner'], 0) + c['contributions_count']
-            
+
         sorted_count = {}
         for k, v in final_count.items():
             if k == "day" or k == "month":
