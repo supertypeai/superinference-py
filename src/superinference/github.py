@@ -39,7 +39,7 @@ class GithubProfile:
             if self.access_token:    
                 raise Exception("Invalid access token. Please check your access token and try again.")
             else:
-                raise Exception("This feature requires an access token. Please provide an access token and try again.")
+                raise Exception("`include_private` feature requires an access token. Please provide an access token and try again.")
         elif response.status_code == 403:
             if self.access_token:
                 raise Exception("API rate limit exceeded, please try again later.")
