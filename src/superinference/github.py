@@ -1,40 +1,36 @@
 import requests
 import re
+from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from base64 import b64decode
 from rich.console import Console
 from rich.theme import Theme
 
-console = Console(theme=Theme({"repr.str":"#54A24B", "repr.number": "#FF7F0E", "repr.none":"#808080"}))
 
-class GithubProfile:
-    def __init__(self, username, access_token=None):
-        """Github profile inference class
+class GithubBaseClass(ABC):
+    def __init__(self, access_token=None):
+        """Base class for Github inference classes
 
         Args:
-            username (str): Github username
             access_token (str, optional): Github access token to increase API rate limit and access private repositories. Defaults to None.
         """
-        self.username = username
         self.access_token = access_token
         self.inference = None
         self._api_url = "https://api.github.com"
-
+        self._console = Console(theme=Theme({"repr.str":"#54A24B", "repr.number": "#FF7F0E", "repr.none":"#808080"}))
+        
     def _error_handling(self, response, graphql=False):
         """Handles errors from the Github API
 
         Args:
             response (requests.models.Response): Response from the Github API
-
-        Returns:
-            requests.models.Response: Response from the Github API, if no errors are found
         """
         if response.status_code == 200:
             if graphql:
                 json_data = response.json()
                 if "errors" in json_data and json_data["errors"][0]["message"]:
                     raise Exception(f"GraphQL API query error - \"{json_data['errors'][0]['message']}\"")
-            return response
+            return
         elif response.status_code == 401:
             if self.access_token:    
                 raise Exception("Invalid access token. Please check your access token and try again.")
@@ -67,9 +63,8 @@ class GithubProfile:
             response = requests.get(url)
             
         if error_handling:
-            return self._error_handling(response)
-        else:
-            return response
+            self._error_handling(response)   
+        return response
     
     def _parse_next_link(self, headers):
         """Parses the next link from the Github API response headers
@@ -124,14 +119,6 @@ class GithubProfile:
         else:
             return item_list, incomplete_results
     
-    def _username_token_check(self):
-        """Checks if the Github username is associated with the provided access token, which is called when the user wants to include private repositories"""
-        test_url = f"{self._api_url}/user"
-        response = self._request(test_url)
-        associated_username = response.json()['login']
-        if associated_username != self.username:
-            raise Exception("If you want to include private repositories, please ensure that the Github username is associated with the provided access token.")
-        
     def _graphql_request(self, query):
         """Makes a request to the Github GraphQL API
 
@@ -147,7 +134,34 @@ class GithubProfile:
             response = requests.post(url, headers=headers, json={"query": query})
         else:
             response = requests.post(url)
-        return self._error_handling(response, graphql=True)
+        self._error_handling(response, graphql=True)
+        return response
+    
+    @abstractmethod
+    def perform_inference(self):
+        """All subclasses should implement this method
+        """
+        pass
+
+
+class GithubProfile(GithubBaseClass):
+    def __init__(self, username, access_token=None):
+        """Github profile inference class
+
+        Args:
+            username (str): Github username
+            access_token (str, optional): Github access token to increase API rate limit and access private repositories. Defaults to None.
+        """
+        self.username = username
+        super().__init__(access_token)
+    
+    def _username_token_check(self):
+        """Checks if the Github username is associated with the provided access token, which is called when the user wants to include private repositories"""
+        test_url = f"{self._api_url}/user"
+        response = self._request(test_url)
+        associated_username = response.json()['login']
+        if associated_username != self.username:
+            raise Exception("If you want to include private repositories, please ensure that the Github username is associated with the provided access token.")
         
     def _profile_inference(self):
         """Infer data regarding the user's Github profile
@@ -536,9 +550,10 @@ class GithubProfile:
             "contribution": contribution
         }
         
-        console.print(self.inference)
+        self._console.print(self.inference)
         
-class GithubRepo:
+
+class GithubRepo(GithubBaseClass):
     def __init__(self, repo_owner, repo_name, access_token=None):
         """Github repo inference class
 
@@ -549,113 +564,8 @@ class GithubRepo:
         """
         self.repo_owner = repo_owner
         self.repo_name = repo_name
-        self.access_token = access_token
-        self._api_url = "https://api.github.com"
-        self.inference = None
-    
-    def _error_handling(self, response, graphql=False):
-        """Handles errors from the Github API
-
-        Args:
-            response (requests.models.Response): Response from the Github API
-
-        Returns:
-            requests.models.Response: Response from the Github API, if no errors are found
-        """
-        if response.status_code == 200:
-            if graphql:
-                json_data = response.json()
-                if "errors" in json_data and json_data["errors"][0]["message"]:
-                    raise Exception(f"GraphQL API query error - \"{json_data['errors'][0]['message']}\"")
-            return response
-        elif response.status_code == 401:
-            if self.access_token:    
-                raise Exception("Invalid access token. Please check your access token and try again.")
-            else:
-                raise Exception("`include_private` feature requires an access token. Please provide an access token and try again.")
-        elif response.status_code == 403:
-            if self.access_token:
-                raise Exception("API rate limit exceeded, please try again later.")
-            else:
-                raise Exception("API rate limit exceeded, please provide an access token to increase rate limit.")
-        elif response.status_code == 404:
-            raise Exception("The requested data is unavailable. Please ensure that you have entered the correct parameters and try again.")
-        else:
-            raise Exception(f"Error with status code of: {response.status_code}")
+        super().__init__(access_token)
         
-    def _request(self, url, error_handling=True):
-        """Makes a request to the Github API
-
-        Args:
-            url (str): URL to be requested
-            error_handling (bool, optional): Whether to handle errors or not before returning the response. Defaults to True.
-
-        Returns:
-            requests.models.Response: Response from the Github API
-        """
-        if self.access_token:
-            headers = {"Authorization": "token {}".format(self.access_token)}
-            response = requests.get(url, headers=headers)
-        else:
-            response = requests.get(url)
-            
-        if error_handling:
-            return self._error_handling(response)
-        else:
-            return response
-    
-    def _parse_next_link(self, headers):
-        """Parses the next link from the Github API response headers
-
-        Args:
-            headers (dict): Response headers from the Github API
-
-        Returns:
-            str: Next link to be requested
-        """
-        if "Link" in headers:
-            links = headers["Link"]
-            if 'rel="next"' in links:
-                next_link = links.split('rel="next"')[0].strip('<>; ')
-                return next_link
-            else:
-                return None
-        else:
-            return None
-    
-    def _multipage_request(self, url, json_key=None):
-        """Makes a request to the Github API and handles pagination
-
-        Args:
-            url (str): URL to be requested
-            json_key (str, optional): Key of the items in the JSON response. Defaults to None.
-
-        Returns:
-            item_list (list): List of combined items from all pages
-            incomplete_results (bool): Whether the results are incomplete or not (due to hitting rate limits)
-            total_count (int): The total count of items for search queries. Only returned for search endpoints.
-        
-        """
-        incomplete_results = False
-        item_list = []
-        is_search = "/search/" in url
-        
-        while url:
-            response = self._request(url)
-            if json_key:
-                item_list.extend(response.json()[json_key])
-            else:
-                item_list.extend(response.json())
-            url = self._parse_next_link(response.headers)
-            remaining_rate = int(response.headers["X-Ratelimit-Remaining"])
-            if url and remaining_rate == 0:
-                incomplete_results = True
-                url = None
-        if is_search:
-            total_count = response.json()["total_count"]
-            return item_list, incomplete_results, total_count
-        else:
-            return item_list, incomplete_results
     
     def perform_inference(self):
         """Perform inference on the Github repository. This will print out a dictionary that includes data and statistics regarding the repository along with its contributions and events. The dictionary will also be stored in the inference attribute.
@@ -715,7 +625,7 @@ class GithubRepo:
                 "incomplete_event_results": incomplete_events,
                 "events_count": event_type_count}
         
-        console.print(self.inference)
+        self._console.print(self.inference)
 
         
         
