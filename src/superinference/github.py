@@ -46,7 +46,7 @@ class GithubProfile:
             else:
                 raise Exception("API rate limit exceeded, please provide an access token to increase rate limit.")
         elif response.status_code == 404:
-            raise Exception("Invalid GitHub username inputted.")
+            raise Exception("The requested data is unavailable. Please ensure that you have entered the correct parameters and try again.")
         else:
             raise Exception(f"Error with status code of: {response.status_code}")
         
@@ -158,7 +158,7 @@ class GithubProfile:
         profile_url = f"{self._api_url}/users/{self.username}"
         response = self._request(profile_url)
         json_data = response.json()
-        profile_data =  {
+        profile =  {
             "login": json_data["login"],
             "name": json_data["name"],
             "company": json_data["company"],
@@ -172,7 +172,7 @@ class GithubProfile:
             "followers": json_data["followers"],
             "following": json_data["following"]
         }
-        return {"data": profile_data, "created_at": json_data['created_at']}
+        return {"data": profile, "created_at": json_data['created_at']}
     
 
     def _repository_inference(self, top_repo_n=3, include_private=False):
@@ -183,15 +183,15 @@ class GithubProfile:
             include_private (bool, optional): Whether to include private repositories in the inference. Defaults to False.
 
         Returns:
-            dict: Github repository statistics and list of original repositories
+            dict: Github repositories statistics and list of original repositories
         """
         if include_private:
             self._username_token_check()
-            repo_url = f"{self._api_url}/user/repos?per_page=100"
+            user_repos_url = f"{self._api_url}/user/repos?per_page=100"
         else:
-            repo_url = f"{self._api_url}/users/{self.username}/repos?per_page=100"
+            user_repos_url = f"{self._api_url}/users/{self.username}/repos?per_page=100"
             
-        repos, incomplete_results = self._multipage_request(repo_url)
+        repos, incomplete_results = self._multipage_request(user_repos_url)
 
         repos.sort(
             key=lambda r: r["stargazers_count"] + r["forks_count"],
@@ -335,15 +335,15 @@ class GithubProfile:
                 query_repo = query_pattern_repo(datetime(i, 1, 1), datetime(i, 12, 31))
 
             response_day = self._graphql_request(query_day)
-            data_day = response_day.json()['data']
+            day_data = response_day.json()['data']
             new_contribution_day=[]
-            for week in data_day["user"]["contributionsCollection"]["contributionCalendar"]["weeks"]:
+            for week in day_data["user"]["contributionsCollection"]["contributionCalendar"]["weeks"]:
                 new_contribution_day.extend([day for day in week["contributionDays"]])
             contributions_per_day.extend(new_contribution_day)
-            contributions_count += data_day["user"]["contributionsCollection"]["contributionCalendar"]["totalContributions"]
+            contributions_count += day_data["user"]["contributionsCollection"]["contributionCalendar"]["totalContributions"]
 
             response_repo = self._graphql_request(query_repo)
-            data_repo = response_repo.json()['data']
+            repo_data = response_repo.json()['data']
             def extract_repo_detail(repository, contributions):
                 return {
                     "name": repository['name'],
@@ -355,10 +355,10 @@ class GithubProfile:
                     "contributions_count": contributions['totalCount'],
                     "is_private": repository['isPrivate']
                 }
-            new_commits = [extract_repo_detail(item['repository'], item['contributions']) for item in data_repo['user']['contributionsCollection']['commitContributionsByRepository']]
-            new_issues = [extract_repo_detail(item['repository'], item['contributions']) for item in data_repo['user']['contributionsCollection']['issueContributionsByRepository']]
-            new_pr = [extract_repo_detail(item['repository'], item['contributions']) for item in data_repo['user']['contributionsCollection']['pullRequestContributionsByRepository']]
-            new_pr_review = [extract_repo_detail(item['repository'], item['contributions']) for item in data_repo['user']['contributionsCollection']['pullRequestReviewContributionsByRepository']]
+            new_commits = [extract_repo_detail(item['repository'], item['contributions']) for item in repo_data['user']['contributionsCollection']['commitContributionsByRepository']]
+            new_issues = [extract_repo_detail(item['repository'], item['contributions']) for item in repo_data['user']['contributionsCollection']['issueContributionsByRepository']]
+            new_pr = [extract_repo_detail(item['repository'], item['contributions']) for item in repo_data['user']['contributionsCollection']['pullRequestContributionsByRepository']]
+            new_pr_review = [extract_repo_detail(item['repository'], item['contributions']) for item in repo_data['user']['contributionsCollection']['pullRequestReviewContributionsByRepository']]
             contributions_per_repo.extend(new_commits + new_issues + new_pr + new_pr_review)
             
         if not include_private:
@@ -418,14 +418,14 @@ class GithubProfile:
         total_weeks = round((today - created_date).days / 7)
         weekly_avg_contributions = round(contributions_count / total_weeks, 3)
         
-        data_contrib = []
+        contrib_data = []
         for r in original_repos[:10]:
             response = self._request(r['contributors_url'])
             repo_data = response.json()
-            data_contrib.extend(repo_data)
+            contrib_data.extend(repo_data)
 
         incoming_contribution = {}
-        for d in data_contrib:
+        for d in contrib_data:
             login = d['login']
             if login != self.username:
                 incoming_contribution[login] = incoming_contribution.get(login, 0) + d['contributions']
@@ -537,3 +537,186 @@ class GithubProfile:
         }
         
         console.print(self.inference)
+        
+class GithubRepo:
+    def __init__(self, repo_owner, repo_name, access_token=None):
+        """Github repo inference class
+
+        Args:
+            repo_owner (str): The Github username of the repository owner
+            repo_name (str): The name of the repository
+            access_token (str, optional): Github access token to increase API rate limit and access private repositories. Defaults to None.
+        """
+        self.repo_owner = repo_owner
+        self.repo_name = repo_name
+        self.access_token = access_token
+        self._api_url = "https://api.github.com"
+        self.inference = None
+    
+    def _error_handling(self, response, graphql=False):
+        """Handles errors from the Github API
+
+        Args:
+            response (requests.models.Response): Response from the Github API
+
+        Returns:
+            requests.models.Response: Response from the Github API, if no errors are found
+        """
+        if response.status_code == 200:
+            if graphql:
+                json_data = response.json()
+                if "errors" in json_data and json_data["errors"][0]["message"]:
+                    raise Exception(f"GraphQL API query error - \"{json_data['errors'][0]['message']}\"")
+            return response
+        elif response.status_code == 401:
+            if self.access_token:    
+                raise Exception("Invalid access token. Please check your access token and try again.")
+            else:
+                raise Exception("`include_private` feature requires an access token. Please provide an access token and try again.")
+        elif response.status_code == 403:
+            if self.access_token:
+                raise Exception("API rate limit exceeded, please try again later.")
+            else:
+                raise Exception("API rate limit exceeded, please provide an access token to increase rate limit.")
+        elif response.status_code == 404:
+            raise Exception("The requested data is unavailable. Please ensure that you have entered the correct parameters and try again.")
+        else:
+            raise Exception(f"Error with status code of: {response.status_code}")
+        
+    def _request(self, url, error_handling=True):
+        """Makes a request to the Github API
+
+        Args:
+            url (str): URL to be requested
+            error_handling (bool, optional): Whether to handle errors or not before returning the response. Defaults to True.
+
+        Returns:
+            requests.models.Response: Response from the Github API
+        """
+        if self.access_token:
+            headers = {"Authorization": "token {}".format(self.access_token)}
+            response = requests.get(url, headers=headers)
+        else:
+            response = requests.get(url)
+            
+        if error_handling:
+            return self._error_handling(response)
+        else:
+            return response
+    
+    def _parse_next_link(self, headers):
+        """Parses the next link from the Github API response headers
+
+        Args:
+            headers (dict): Response headers from the Github API
+
+        Returns:
+            str: Next link to be requested
+        """
+        if "Link" in headers:
+            links = headers["Link"]
+            if 'rel="next"' in links:
+                next_link = links.split('rel="next"')[0].strip('<>; ')
+                return next_link
+            else:
+                return None
+        else:
+            return None
+    
+    def _multipage_request(self, url, json_key=None):
+        """Makes a request to the Github API and handles pagination
+
+        Args:
+            url (str): URL to be requested
+            json_key (str, optional): Key of the items in the JSON response. Defaults to None.
+
+        Returns:
+            item_list (list): List of combined items from all pages
+            incomplete_results (bool): Whether the results are incomplete or not (due to hitting rate limits)
+            total_count (int): The total count of items for search queries. Only returned for search endpoints.
+        
+        """
+        incomplete_results = False
+        item_list = []
+        is_search = "/search/" in url
+        
+        while url:
+            response = self._request(url)
+            if json_key:
+                item_list.extend(response.json()[json_key])
+            else:
+                item_list.extend(response.json())
+            url = self._parse_next_link(response.headers)
+            remaining_rate = int(response.headers["X-Ratelimit-Remaining"])
+            if url and remaining_rate == 0:
+                incomplete_results = True
+                url = None
+        if is_search:
+            total_count = response.json()["total_count"]
+            return item_list, incomplete_results, total_count
+        else:
+            return item_list, incomplete_results
+    
+    def perform_inference(self):
+        """Perform inference on the Github repository. This will print out a dictionary that includes data and statistics regarding the repository along with its contributions and events. The dictionary will also be stored in the inference attribute.
+
+        Returns:
+            dict: Data about the repository
+        """
+        repo_url = f"{self._api_url}/repos/{self.repo_owner}/{self.repo_name}"
+        response = self._request(repo_url)
+        repo_data = response.json()
+        
+        repo_language = self._request(repo_data["languages_url"]).json()
+        language_data = {lang: round(bytes / sum(repo_language.values()), 3) for lang, bytes in repo_language.items()}
+        
+        events_url = f"{repo_data['events_url']}?per_page=100"
+        repo_events, incomplete_events = self._multipage_request(events_url)
+        event_type_count = {}
+        for event in repo_events:
+            event_type_count[event['type']] = event_type_count.get(event['type'], 0) + 1
+            
+        contributors_url = f"{repo_data['contributors_url']}?per_page=100"
+        repo_contributors, incomplete_contributors = self._multipage_request(contributors_url)
+        total_contributions = sum(contributor['contributions'] for contributor in repo_contributors)
+        total_contributors = len(repo_contributors)
+        
+        contributions_data = []
+        for user in repo_contributors:
+            contributions_data.append(
+            {'contributor_username': user['login'],
+            'contributor_html_url': user['html_url'],
+            'contributor_repos_url': user['repos_url'],
+            'contributor_type': user['type'],
+            'contributions': user['contributions'],
+            'contributions_percentage': round(user['contributions'] / total_contributions, 3)}
+            )
+        
+        self.inference = {"name": repo_data["name"],
+                "html_url": repo_data["html_url"],
+                "description": repo_data["description"],
+                "owner_username": repo_data["owner"]["login"],
+                "owner_html_url": repo_data["owner"]["html_url"],
+                "topic": repo_data["topics"],
+                "visibility": repo_data["visibility"],
+                "created_at": repo_data["created_at"],
+                "last_pushed_at": repo_data["pushed_at"],
+                "top_language": repo_data["language"],
+                "languages_percentage": language_data,
+                "stargazers_count": repo_data["stargazers_count"],
+                "forks_count": repo_data["forks_count"],
+                "watchers_count": repo_data["watchers_count"],
+                "subscribers_count": repo_data["subscribers_count"],
+                "open_issues_count": repo_data["open_issues_count"],
+                "incomplete_contribution_results": incomplete_contributors,
+                "contributors_count": total_contributors,
+                "contributions_count": total_contributions,
+                "contributions": contributions_data,
+                "incomplete_event_results": incomplete_events,
+                "events_count": event_type_count}
+        
+        console.print(self.inference)
+
+        
+        
+        
