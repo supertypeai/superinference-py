@@ -1,5 +1,7 @@
 ## Superinference
 
+![superinference_thumbnail](https://user-images.githubusercontent.com/69706675/236219995-ae410ce5-4863-4bb7-a61c-1b2aaf4c104f.png)
+
 Superinference is a library that infers analysis-ready attributes from a person's social media username or unique identifier and returns them as JSON objects. The development of Superinference was initiated by [Aurellia Christie](https://github.com/AurelliaChristie) and other members of [Supertype](https://github.com/supertypeai), who created a Javascript library that can be accessed [here](https://github.com/supertypeai/superinference).
 
 It supports both token-based (OAuth) authorization for authenticated requests and unauthenticated requests for public data. It currently supports the following social media channels:
